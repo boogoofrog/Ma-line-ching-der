@@ -21,12 +21,19 @@ sleep 2
   --no-first-run \
   > /dev/null 2>&1 &
 
-sleep 3
+# 等待 Chrome 就緒（最多 15 秒）
+echo -n "等待 Chrome 就緒"
+for i in $(seq 1 15); do
+  sleep 1
+  echo -n "."
+  if curl -s "http://localhost:${PORT}/json/version" > /dev/null 2>&1; then
+    echo ""
+    echo "[OK] Chrome 啟動成功！可以執行 python app.py"
+    exit 0
+  fi
+done
 
-if curl -s "http://localhost:${PORT}/json/version" > /dev/null 2>&1; then
-  echo "[OK] Chrome 啟動成功！"
-  echo "     你的 LINE 擴充功能已就緒，可以執行 python app.py"
-else
-  echo "[ERROR] Chrome 啟動失敗。"
-  echo "        請確認路徑正確：${CHROME}"
-fi
+echo ""
+echo "[ERROR] Chrome 在 15 秒內未能開放 port ${PORT}。"
+echo "        請手動確認 Chrome 是否正確開啟，然後執行："
+echo "        curl http://localhost:${PORT}/json/version"
