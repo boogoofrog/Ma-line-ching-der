@@ -1,183 +1,101 @@
 """
-LINE Web (web.line.me) automation via Playwright.
+LINE Desktop App automation via macOS AppleScript.
 
-Flow:
-  1. python line_sender.py --setup   # 開瀏覽器掃 QR 登入，session 存在 browser_session/
-  2. python line_sender.py --send "聯絡人" "訊息"  # 測試發訊息
-  3. python app.py                   # 啟動排程機器人
+Prerequisites:
+  - LINE for Mac installed (App Store)
+  - LINE logged in on the desktop app
+  - 系統偏好設定 → 隱私權 → 輔助使用 → 允許 Terminal（或 Python）控制電腦
 
-不需要 Chrome extension，不需要 API Token。
+Usage:
+  python line_sender.py --send "Patina Ho" "測試測試"
 """
 
 import os
+import time
+import subprocess
 import argparse
 
-from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-load_dotenv()
-
-LINE_WEB_URL = "https://web.line.me/"
-
-SESSION_DIR = os.environ.get(
-    "SESSION_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_session"),
-)
-
-
-# ---------- Launch ----------
-
-def _launch(playwright, headless: bool = False):
-    return playwright.chromium.launch_persistent_context(
-        user_data_dir=SESSION_DIR,
-        headless=headless,
-        args=["--no-sandbox", "--disable-dev-shm-usage"],
-        viewport={"width": 1280, "height": 900},
+def _run_applescript(script: str) -> str:
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
     )
-
-
-# ---------- Public API ----------
-
-def setup_login():
-    """Open browser for QR code login. Run once."""
-    print("開啟 LINE Web，請用手機掃描 QR Code 登入...")
-    with sync_playwright() as p:
-        context = _launch(p, headless=False)
-        page = context.new_page()
-        page.goto(LINE_WEB_URL, wait_until="domcontentloaded")
-        print("掃描完成後按 ENTER 儲存 session...")
-        input()
-        context.close()
-    print("[OK] Session 已儲存，之後不需要重新登入。")
+    if result.returncode != 0:
+        raise RuntimeError(f"AppleScript 失敗：{result.stderr.strip()}")
+    return result.stdout.strip()
 
 
 def send_message(target_name: str, message: str, **_) -> bool:
     """
-    Send `message` to LINE contact/group `target_name` via LINE Web.
-    Returns True on success, raises on failure.
+    Send `message` to LINE contact/group `target_name` via LINE desktop app.
     """
-    with sync_playwright() as p:
-        context = _launch(p, headless=True)
-        try:
-            page = context.new_page()
-            page.goto(LINE_WEB_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(3000)
+    # Escape special characters for AppleScript strings
+    safe_target  = target_name.replace('"', '\\"').replace("\\", "\\\\")
+    safe_message = message.replace('"', '\\"').replace("\\", "\\\\")
 
-            # Search for contact
-            _search_and_open(page, target_name)
+    script = f"""
+tell application "LINE"
+    activate
+end tell
 
-            # Type and send message
-            _type_and_send(page, message)
+delay 1.5
 
-            print(f"[OK] Sent to '{target_name}': {message[:60]}")
-            return True
-        finally:
-            context.close()
+tell application "System Events"
+    tell process "LINE"
+        -- 開啟搜尋 (Cmd+F)
+        keystroke "f" using command down
+        delay 0.8
 
+        -- 輸入聯絡人名稱
+        keystroke "{safe_target}"
+        delay 1.5
 
-def _search_and_open(page, target_name: str):
-    """Find and click the chat with target_name."""
-    search_selectors = [
-        "input[placeholder*='搜尋']",
-        "input[placeholder*='Search' i]",
-        "button[class*='search' i]",
-        "span[class*='search' i]",
-    ]
+        -- 按下 Enter 進入對話
+        key code 36
+        delay 1.0
 
-    # Try to click search icon / box
-    for sel in search_selectors:
-        try:
-            el = page.locator(sel).first
-            el.wait_for(timeout=4000)
-            el.click()
-            break
-        except PlaywrightTimeout:
-            continue
+        -- 輸入訊息
+        keystroke "{safe_message}"
+        delay 0.5
 
-    page.wait_for_timeout(500)
+        -- 送出 (Enter)
+        key code 36
+        delay 0.5
+    end tell
+end tell
+"""
 
-    # Type in search box
-    search_input_selectors = [
-        "input[placeholder*='搜尋']",
-        "input[placeholder*='Search' i]",
-        "input[type='search']",
-        "input[class*='search' i]",
-    ]
-    search_input = None
-    for sel in search_input_selectors:
-        try:
-            el = page.locator(sel).first
-            el.wait_for(timeout=3000)
-            search_input = el
-            break
-        except PlaywrightTimeout:
-            continue
-
-    if search_input is None:
-        raise RuntimeError(
-            "找不到搜尋框。\n"
-            "請確認已登入 LINE Web（執行 python line_sender.py --setup）"
-        )
-
-    search_input.fill(target_name)
-    page.wait_for_timeout(1500)
-
-    # Click first result
-    result_selectors = [
-        f"span[title='{target_name}']",
-        "li[class*='chat'] span[class*='name']",
-        "div[class*='chatItem']",
-        "li[class*='RoomListItem']",
-        "div[class*='searchResult'] li",
-    ]
-    for sel in result_selectors:
-        try:
-            el = page.locator(sel).first
-            el.wait_for(timeout=4000)
-            el.click()
-            page.wait_for_timeout(800)
-            return
-        except PlaywrightTimeout:
-            continue
-
-    raise RuntimeError(f"找不到聯絡人：{target_name}")
+    _run_applescript(script)
+    print(f"[OK] Sent to '{target_name}': {message[:60]}")
+    return True
 
 
-def _type_and_send(page, message: str):
-    """Type message and press Enter."""
-    input_selectors = [
-        "div[contenteditable='true'][class*='message' i]",
-        "div[contenteditable='true']",
-        "textarea[class*='input' i]",
-    ]
-    for sel in input_selectors:
-        try:
-            el = page.locator(sel).last
-            el.wait_for(timeout=5000)
-            el.click()
-            el.fill(message)
-            page.wait_for_timeout(300)
-            el.press("Enter")
-            page.wait_for_timeout(1000)
-            return
-        except PlaywrightTimeout:
-            continue
+def check_line_installed() -> bool:
+    """Return True if LINE.app exists."""
+    result = subprocess.run(
+        ["osascript", "-e", 'id of application "LINE"'],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
 
-    raise RuntimeError("找不到訊息輸入框")
-
-
-# ---------- CLI ----------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LINE Web 自動發訊息")
-    parser.add_argument("--setup", action="store_true",
-                        help="開啟瀏覽器進行 LINE Web QR 登入")
-    parser.add_argument("--send", nargs=2, metavar=("TARGET", "MESSAGE"),
-                        help="立即發送：--send '聯絡人' '訊息'")
+    parser = argparse.ArgumentParser(description="LINE 桌面版自動發訊息 (macOS)")
+    parser.add_argument(
+        "--send", nargs=2, metavar=("TARGET", "MESSAGE"),
+        help="立即發送：--send '聯絡人名稱' '訊息內容'",
+    )
+    parser.add_argument("--check", action="store_true",
+                        help="確認 LINE App 是否已安裝")
     args = parser.parse_args()
 
-    if args.setup:
-        setup_login()
+    if args.check:
+        if check_line_installed():
+            print("[OK] LINE App 已安裝")
+        else:
+            print("[ERROR] 找不到 LINE App，請從 App Store 安裝")
     elif args.send:
         target, msg = args.send
         send_message(target, msg)

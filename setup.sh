@@ -1,5 +1,4 @@
 #!/bin/bash
-# 一鍵安裝與初始化
 set -e
 
 echo "=== 建立虛擬環境 (.venv) ==="
@@ -9,26 +8,22 @@ source .venv/bin/activate
 echo "=== 安裝 Python 套件 ==="
 pip install -r requirements.txt
 
-echo "=== 安裝 Playwright Chromium ==="
-playwright install chromium
-
 echo "=== 複製環境設定 ==="
 if [ ! -f .env ]; then
   cp .env.example .env
-  echo "已建立 .env，請視需要編輯"
 fi
 
 echo ""
-echo "安裝完成！之後每次使用前請先執行："
+echo "安裝完成！"
+echo ""
+echo "使用前請確認："
+echo "  1. LINE for Mac 已安裝並登入（App Store 搜尋 LINE）"
+echo "  2. 系統偏好設定 → 隱私權與安全性 → 輔助使用"
+echo "     → 允許 Terminal（或 iTerm2）控制電腦"
+echo ""
+echo "測試發訊息："
 echo "  source .venv/bin/activate"
+echo "  python line_sender.py --send '聯絡人名稱' '訊息內容'"
 echo ""
-echo "=== 首次登入 LINE ==="
-echo "請執行下列指令，在彈出的瀏覽器視窗中掃描 QR code 登入 LINE："
-echo ""
-echo "  python line_sender.py --setup"
-echo ""
-echo "登入完成後，執行以下指令啟動機器人："
-echo ""
-echo "  python app.py"
-echo ""
-echo "然後開啟瀏覽器前往 http://localhost:5000"
+echo "啟動排程機器人："
+echo "  python app.py  →  http://localhost:5000"
