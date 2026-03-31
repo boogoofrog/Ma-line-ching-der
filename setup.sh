@@ -3,10 +3,10 @@
 set -e
 
 echo "=== 安裝 Python 套件 ==="
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 
 echo "=== 安裝 Playwright Chromium ==="
-playwright install chromium
+python3 -m playwright install chromium
 
 echo "=== 複製環境設定 ==="
 if [ ! -f .env ]; then
