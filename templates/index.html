@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LINE 預約發訊息</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           background: #f0f2f5; color: #333; min-height: 100vh; }
+
+    header { background: #00b900; color: #fff; padding: 16px 24px;
+             font-size: 1.2rem; font-weight: 700; display: flex;
+             align-items: center; gap: 10px; }
+    header span { font-size: 1.5rem; }
+
+    main { max-width: 760px; margin: 32px auto; padding: 0 16px; }
+
+    .card { background: #fff; border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,.08); padding: 24px; margin-bottom: 24px; }
+
+    h2 { font-size: 1rem; font-weight: 600; margin-bottom: 16px; color: #555; }
+
+    .form-group { margin-bottom: 14px; }
+    label { display: block; font-size: .85rem; margin-bottom: 4px; color: #666; }
+    input, textarea { width: 100%; padding: 10px 12px; border: 1px solid #ddd;
+                      border-radius: 8px; font-size: .95rem; transition: border .2s; }
+    input:focus, textarea:focus { outline: none; border-color: #00b900; }
+    textarea { resize: vertical; min-height: 90px; }
+
+    button.submit { background: #00b900; color: #fff; border: none;
+                    padding: 11px 28px; border-radius: 8px; font-size: .95rem;
+                    font-weight: 600; cursor: pointer; transition: background .2s; }
+    button.submit:hover { background: #009900; }
+    button.submit:disabled { background: #aaa; cursor: not-allowed; }
+
+    #toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px;
+             border-radius: 8px; font-size: .9rem; font-weight: 600;
+             display: none; z-index: 999; }
+    #toast.ok  { background: #d4edda; color: #155724; }
+    #toast.err { background: #f8d7da; color: #721c24; }
+
+    table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
+    th { font-weight: 600; color: #777; }
+    tr:last-child td { border-bottom: none; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px;
+             font-size: .78rem; font-weight: 600; }
+    .badge.pending   { background: #fff3cd; color: #856404; }
+    .badge.sent      { background: #d4edda; color: #155724; }
+    .badge.cancelled { background: #e2e3e5; color: #495057; }
+    .badge.error     { background: #f8d7da; color: #721c24; }
+
+    button.cancel-btn { background: none; border: 1px solid #dc3545; color: #dc3545;
+                        padding: 3px 10px; border-radius: 6px; font-size: .8rem;
+                        cursor: pointer; }
+    button.cancel-btn:hover { background: #dc3545; color: #fff; }
+
+    .empty { text-align: center; color: #aaa; padding: 20px 0; font-size: .9rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span>&#128172;</span> LINE 預約發訊息機器人
+</header>
+
+<main>
+  <!-- Schedule form -->
+  <div class="card">
+    <h2>新增預約訊息</h2>
+    <form id="scheduleForm">
+      <div class="form-group">
+        <label>聯絡人 / 群組名稱（LINE 上顯示的名字）</label>
+        <input type="text" id="target_name" placeholder="例：家人群組" required />
+      </div>
+      <div class="form-group">
+        <label>訊息內容</label>
+        <textarea id="message" placeholder="輸入要發送的訊息..." required></textarea>
+      </div>
+      <div class="form-group">
+        <label>預約發送時間</label>
+        <input type="datetime-local" id="scheduled_at" required />
+      </div>
+      <button type="submit" class="submit" id="submitBtn">預約發送</button>
+    </form>
+  </div>
+
+  <!-- Schedule list -->
+  <div class="card">
+    <h2>預約清單</h2>
+    <div id="tableWrap">
+      <div class="empty">載入中...</div>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+  // Set default datetime to now + 10 minutes
+  const dtInput = document.getElementById("scheduled_at");
+  const now = new Date(Date.now() + 10 * 60 * 1000);
+  dtInput.value = now.toISOString().slice(0, 16);
+
+  // --- Toast ---
+  function toast(msg, type = "ok") {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.className = type;
+    el.style.display = "block";
+    setTimeout(() => { el.style.display = "none"; }, 3500);
+  }
+
+  // --- Load schedule list ---
+  async function loadSchedules() {
+    const res = await fetch("/api/schedules");
+    const data = await res.json();
+    const wrap = document.getElementById("tableWrap");
+
+    if (!data.length) {
+      wrap.innerHTML = '<div class="empty">目前沒有預約訊息</div>';
+      return;
+    }
+
+    const rows = data.map(r => {
+      const dt = new Date(r.scheduled_at).toLocaleString("zh-TW");
+      const badge = `<span class="badge ${r.status.startsWith('error') ? 'error' : r.status}">${statusLabel(r.status)}</span>`;
+      const cancelBtn = (r.status === "pending")
+        ? `<button class="cancel-btn" onclick="cancelJob('${r.id}')">取消</button>`
+        : "";
+      return `<tr>
+        <td>${r.target_name}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.message}">${r.message}</td>
+        <td>${dt}</td>
+        <td>${badge}</td>
+        <td>${cancelBtn}</td>
+      </tr>`;
+    }).join("");
+
+    wrap.innerHTML = `
+      <table>
+        <thead><tr><th>收件人</th><th>訊息</th><th>發送時間</th><th>狀態</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  function statusLabel(s) {
+    return { pending: "待發送", sent: "已發送", cancelled: "已取消" }[s] || s;
+  }
+
+  // --- Submit form ---
+  document.getElementById("scheduleForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("submitBtn");
+    btn.disabled = true;
+    btn.textContent = "處理中...";
+
+    const payload = {
+      target_name:  document.getElementById("target_name").value.trim(),
+      message:      document.getElementById("message").value.trim(),
+      scheduled_at: document.getElementById("scheduled_at").value,
+    };
+
+    try {
+      const res = await fetch("/api/schedules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "未知錯誤");
+      toast("預約成功！");
+      document.getElementById("message").value = "";
+      loadSchedules();
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "預約發送";
+    }
+  });
+
+  // --- Cancel ---
+  async function cancelJob(id) {
+    if (!confirm("確定要取消這則預約訊息？")) return;
+    try {
+      const res = await fetch(`/api/schedules/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "取消失敗");
+      toast("已取消預約");
+      loadSchedules();
+    } catch (err) {
+      toast(err.message, "err");
+    }
+  }
+
+  loadSchedules();
+  setInterval(loadSchedules, 15000); // refresh every 15s
+</script>
+</body>
+</html>
