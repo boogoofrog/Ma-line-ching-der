@@ -1,12 +1,12 @@
 """
-LINE Chrome Extension automation via Playwright + CDP.
+LINE Web (web.line.me) automation via Playwright.
 
 Flow:
-  1. bash start_chrome.sh          # 啟動專用 Chrome（只需第一次設定）
-  2. 在該 Chrome 安裝 LINE 擴充功能並登入
-  3. python app.py                 # 啟動排程機器人
+  1. python line_sender.py --setup   # 開瀏覽器掃 QR 登入，session 存在 browser_session/
+  2. python line_sender.py --send "聯絡人" "訊息"  # 測試發訊息
+  3. python app.py                   # 啟動排程機器人
 
-Playwright 透過 CDP 連接到已執行的 Chrome，不另開新視窗。
+不需要 Chrome extension，不需要 API Token。
 """
 
 import os
@@ -17,133 +17,167 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 load_dotenv()
 
-LINE_EXT_ID  = os.environ.get("LINE_EXT_ID", "ophjlpahpchlmihnnnihgmmeilfjmjjc")
-LINE_EXT_URL = f"chrome-extension://{LINE_EXT_ID}/index.html"
-CDP_URL      = os.environ.get("CHROME_CDP_URL", "http://localhost:9222")
+LINE_WEB_URL = "https://web.line.me/"
+
+SESSION_DIR = os.environ.get(
+    "SESSION_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_session"),
+)
 
 
-# ---------- Internal helpers ----------
+# ---------- Launch ----------
 
-def _connect():
-    """Return (playwright_instance, browser) connected via CDP."""
-    p = sync_playwright().start()
-    try:
-        browser = p.chromium.connect_over_cdp(CDP_URL)
-    except Exception:
-        p.stop()
-        raise RuntimeError(
-            f"無法連接 Chrome ({CDP_URL})。\n"
-            "請先執行：bash start_chrome.sh"
-        )
-    return p, browser
-
-
-def _get_line_page(browser):
-    """Search all contexts/pages for an open LINE tab; if not found, open one."""
-    # Search all contexts (LINE may open in its own window/context)
-    for ctx in browser.contexts:
-        for pg in ctx.pages:
-            if LINE_EXT_ID in pg.url:
-                pg.bring_to_front()
-                return pg
-
-    # Not open yet — open LINE extension in first context
-    ctx = browser.contexts[0]
-    pg = ctx.new_page()
-    pg.goto(LINE_EXT_URL, wait_until="domcontentloaded", timeout=15000)
-    pg.wait_for_timeout(2000)
-    return pg
-
-
-def _find_search_box(page):
-    selectors = [
-        "input[placeholder*='搜尋']",
-        "input[placeholder*='Search' i]",
-        "input[type='search']",
-        "input[class*='search' i]",
-        "div[class*='search' i] input",
-    ]
-    for sel in selectors:
-        loc = page.locator(sel).first
-        try:
-            loc.wait_for(timeout=3000)
-            return loc
-        except PlaywrightTimeout:
-            continue
-    raise RuntimeError(
-        "找不到 LINE 搜尋框。\n"
-        "請確認 LINE 擴充功能已安裝並登入（bash start_chrome.sh）"
+def _launch(playwright, headless: bool = False):
+    return playwright.chromium.launch_persistent_context(
+        user_data_dir=SESSION_DIR,
+        headless=headless,
+        args=["--no-sandbox", "--disable-dev-shm-usage"],
+        viewport={"width": 1280, "height": 900},
     )
 
 
 # ---------- Public API ----------
 
+def setup_login():
+    """Open browser for QR code login. Run once."""
+    print("開啟 LINE Web，請用手機掃描 QR Code 登入...")
+    with sync_playwright() as p:
+        context = _launch(p, headless=False)
+        page = context.new_page()
+        page.goto(LINE_WEB_URL, wait_until="domcontentloaded")
+        print("掃描完成後按 ENTER 儲存 session...")
+        input()
+        context.close()
+    print("[OK] Session 已儲存，之後不需要重新登入。")
+
+
 def send_message(target_name: str, message: str, **_) -> bool:
     """
-    Send `message` to LINE contact/group `target_name`.
+    Send `message` to LINE contact/group `target_name` via LINE Web.
     Returns True on success, raises on failure.
     """
-    p, browser = _connect()
-    try:
-        page = _get_line_page(browser)
+    with sync_playwright() as p:
+        context = _launch(p, headless=True)
+        try:
+            page = context.new_page()
+            page.goto(LINE_WEB_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(3000)
 
-        # Search contact / group
-        search_box = _find_search_box(page)
-        search_box.click()
-        search_box.triple_click()
-        search_box.fill(target_name)
-        page.wait_for_timeout(1500)
+            # Search for contact
+            _search_and_open(page, target_name)
 
-        # Click first result
-        first_result = page.locator(
-            "li.chatList-item, "
-            "li[class*='chatListItem'], "
-            "div[class*='contact-item'], "
-            "li[class*='RoomListItem'], "
-            "div[class*='ChatListItem']"
-        ).first
-        first_result.wait_for(timeout=8000)
-        first_result.click()
-        page.wait_for_timeout(800)
+            # Type and send message
+            _type_and_send(page, message)
 
-        # Type and send
-        input_box = page.locator(
-            "div[contenteditable='true'], "
-            "textarea[class*='input'], "
-            "div[class*='messageInput'], "
-            "div[class*='textInput']"
-        ).first
-        input_box.wait_for(timeout=8000)
-        input_box.click()
-        input_box.fill(message)
-        page.wait_for_timeout(300)
-        input_box.press("Enter")
-        page.wait_for_timeout(1000)
+            print(f"[OK] Sent to '{target_name}': {message[:60]}")
+            return True
+        finally:
+            context.close()
 
-        print(f"[OK] Sent to '{target_name}': {message[:60]}")
-        return True
-    finally:
-        browser.close()
-        p.stop()
+
+def _search_and_open(page, target_name: str):
+    """Find and click the chat with target_name."""
+    search_selectors = [
+        "input[placeholder*='搜尋']",
+        "input[placeholder*='Search' i]",
+        "button[class*='search' i]",
+        "span[class*='search' i]",
+    ]
+
+    # Try to click search icon / box
+    for sel in search_selectors:
+        try:
+            el = page.locator(sel).first
+            el.wait_for(timeout=4000)
+            el.click()
+            break
+        except PlaywrightTimeout:
+            continue
+
+    page.wait_for_timeout(500)
+
+    # Type in search box
+    search_input_selectors = [
+        "input[placeholder*='搜尋']",
+        "input[placeholder*='Search' i]",
+        "input[type='search']",
+        "input[class*='search' i]",
+    ]
+    search_input = None
+    for sel in search_input_selectors:
+        try:
+            el = page.locator(sel).first
+            el.wait_for(timeout=3000)
+            search_input = el
+            break
+        except PlaywrightTimeout:
+            continue
+
+    if search_input is None:
+        raise RuntimeError(
+            "找不到搜尋框。\n"
+            "請確認已登入 LINE Web（執行 python line_sender.py --setup）"
+        )
+
+    search_input.fill(target_name)
+    page.wait_for_timeout(1500)
+
+    # Click first result
+    result_selectors = [
+        f"span[title='{target_name}']",
+        "li[class*='chat'] span[class*='name']",
+        "div[class*='chatItem']",
+        "li[class*='RoomListItem']",
+        "div[class*='searchResult'] li",
+    ]
+    for sel in result_selectors:
+        try:
+            el = page.locator(sel).first
+            el.wait_for(timeout=4000)
+            el.click()
+            page.wait_for_timeout(800)
+            return
+        except PlaywrightTimeout:
+            continue
+
+    raise RuntimeError(f"找不到聯絡人：{target_name}")
+
+
+def _type_and_send(page, message: str):
+    """Type message and press Enter."""
+    input_selectors = [
+        "div[contenteditable='true'][class*='message' i]",
+        "div[contenteditable='true']",
+        "textarea[class*='input' i]",
+    ]
+    for sel in input_selectors:
+        try:
+            el = page.locator(sel).last
+            el.wait_for(timeout=5000)
+            el.click()
+            el.fill(message)
+            page.wait_for_timeout(300)
+            el.press("Enter")
+            page.wait_for_timeout(1000)
+            return
+        except PlaywrightTimeout:
+            continue
+
+    raise RuntimeError("找不到訊息輸入框")
 
 
 # ---------- CLI ----------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LINE 自動發訊息（透過 CDP 連接 Chrome）")
-    parser.add_argument(
-        "--send", nargs=2, metavar=("TARGET", "MESSAGE"),
-        help="立即發送：--send '聯絡人名稱' '訊息內容'",
-    )
-    parser.add_argument("--check", action="store_true",
-                        help="確認是否可成功連接 Chrome")
+    parser = argparse.ArgumentParser(description="LINE Web 自動發訊息")
+    parser.add_argument("--setup", action="store_true",
+                        help="開啟瀏覽器進行 LINE Web QR 登入")
+    parser.add_argument("--send", nargs=2, metavar=("TARGET", "MESSAGE"),
+                        help="立即發送：--send '聯絡人' '訊息'")
     args = parser.parse_args()
 
-    if args.check:
-        p, browser = _connect()
-        print(f"[OK] 已連接 Chrome，共 {len(browser.contexts[0].pages)} 個分頁")
-        browser.close()
-        p.stop()
+    if args.setup:
+        setup_login()
     elif args.send:
         target, msg = args.send
         send_message(target, msg)
