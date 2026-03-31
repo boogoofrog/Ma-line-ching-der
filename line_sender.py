@@ -66,7 +66,7 @@ def setup_login():
     print("Opening Chrome for LINE login. Scan QR code in the LINE extension.")
     print("Close the browser when you are fully logged in.")
     with sync_playwright() as p:
-        context = playwright.chromium.launch_persistent_context(
+        context = p.chromium.launch_persistent_context(
             user_data_dir=CHROME_USER_DATA_DIR,
             headless=False,
             channel="chrome",
