@@ -38,14 +38,18 @@ def _connect():
     return p, browser
 
 
-def _get_line_page(context):
-    """Return existing LINE tab, or open a new one."""
-    for pg in context.pages:
-        if LINE_EXT_ID in pg.url:
-            pg.bring_to_front()
-            return pg
+def _get_line_page(browser):
+    """Search all contexts/pages for an open LINE tab; if not found, open one."""
+    # Search all contexts (LINE may open in its own window/context)
+    for ctx in browser.contexts:
+        for pg in ctx.pages:
+            if LINE_EXT_ID in pg.url:
+                pg.bring_to_front()
+                return pg
 
-    pg = context.new_page()
+    # Not open yet — open LINE extension in first context
+    ctx = browser.contexts[0]
+    pg = ctx.new_page()
     pg.goto(LINE_EXT_URL, wait_until="domcontentloaded", timeout=15000)
     pg.wait_for_timeout(2000)
     return pg
@@ -81,8 +85,7 @@ def send_message(target_name: str, message: str, **_) -> bool:
     """
     p, browser = _connect()
     try:
-        context = browser.contexts[0]
-        page = _get_line_page(context)
+        page = _get_line_page(browser)
 
         # Search contact / group
         search_box = _find_search_box(page)
