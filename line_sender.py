@@ -118,14 +118,9 @@ def setup_login():
     with sync_playwright() as p:
         context = _launch(p, headless=False)
         page = context.new_page()
-        # Navigate to the extension popup directly
-        try:
-            page.goto(LINE_EXT_URL, timeout=10000)
-        except Exception:
-            # If extension URL fails, open blank page and guide user
-            page.goto("about:blank")
-            print("[INFO] 請手動點擊瀏覽器右上角的 LINE 擴充功能圖示")
-
+        page.goto("https://www.google.com", wait_until="domcontentloaded")
+        print("\n[INFO] 瀏覽器已開啟。")
+        print("[INFO] 請點擊右上角的 LINE 擴充功能圖示，掃描 QR code 完成登入。")
         input("\n登入完成後，按 ENTER 關閉瀏覽器並儲存 session...\n")
         context.close()
     print("[OK] 登入 session 已儲存。")
@@ -140,7 +135,18 @@ def send_message(target_name: str, message: str, headless: bool = True) -> bool:
         context = _launch(p, headless=headless)
         try:
             page = context.new_page()
-            page.goto(LINE_EXT_URL, wait_until="domcontentloaded", timeout=15000)
+            # Retry navigating to extension URL — extension needs a moment to register
+            for attempt in range(5):
+                try:
+                    page.goto(LINE_EXT_URL, wait_until="domcontentloaded", timeout=10000)
+                    break
+                except Exception:
+                    if attempt == 4:
+                        raise RuntimeError(
+                            f"無法開啟 LINE 擴充功能 ({LINE_EXT_URL})。"
+                            "請確認已安裝 LINE Chrome 擴充功能並執行過 --setup 登入。"
+                        )
+                    page.wait_for_timeout(2000)
             page.wait_for_timeout(2000)
 
             # --- Search for contact / group ---
