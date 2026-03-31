@@ -2,11 +2,15 @@
 # 一鍵安裝與初始化
 set -e
 
+echo "=== 建立虛擬環境 (.venv) ==="
+python3 -m venv .venv
+source .venv/bin/activate
+
 echo "=== 安裝 Python 套件 ==="
-python3 -m pip install -r requirements.txt
+pip install -r requirements.txt
 
 echo "=== 安裝 Playwright Chromium ==="
-python3 -m playwright install chromium
+playwright install chromium
 
 echo "=== 複製環境設定 ==="
 if [ ! -f .env ]; then
@@ -14,6 +18,9 @@ if [ ! -f .env ]; then
   echo "已建立 .env，請視需要編輯"
 fi
 
+echo ""
+echo "安裝完成！之後每次使用前請先執行："
+echo "  source .venv/bin/activate"
 echo ""
 echo "=== 首次登入 LINE ==="
 echo "請執行下列指令，在彈出的瀏覽器視窗中掃描 QR code 登入 LINE："
