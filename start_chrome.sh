@@ -13,13 +13,12 @@ echo "關閉現有 Chrome，以遠端偵錯模式重新啟動..."
 osascript -e 'quit app "Google Chrome"' 2>/dev/null \
   || killall "Google Chrome" 2>/dev/null \
   || true
-sleep 2
+sleep 3
 
-# 用預設 profile 啟動（LINE 已安裝、已登入）
-"${CHROME}" \
+# 用 open -a 啟動（macOS 最相容的方式）
+open -a "Google Chrome" --args \
   --remote-debugging-port="${PORT}" \
-  --no-first-run \
-  > /dev/null 2>&1 &
+  --no-first-run
 
 # 等待 Chrome 就緒（最多 15 秒）
 echo -n "等待 Chrome 就緒"
